@@ -14,7 +14,6 @@ amazon-connect-ctr-to-redshift/
 │   ├── create_tables.sql
 │   └── insert_new_f_calls.sql
 ├── README.md
-├── architecture-diagram.png (optional – create with draw.io)
 └── .gitignore
 ```
 
