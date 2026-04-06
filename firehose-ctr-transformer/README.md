@@ -28,13 +28,29 @@ This Lambda function transforms raw **Amazon Connect Contact Trace Records (CTRs
 After transformation, Firehose writes the records as JSON to an S3 bucket. Redshift then loads them using a `COPY` command similar to this:
 
 ```sql
-COPY connect.f_calls
+COPY connect.f_calls_staging
 FROM 's3://______'
 IAM_ROLE '____'
 MANIFEST
 FORMAT AS JSON 'auto';
 ```
 ---
+
+## Data Format
+
+Data is currently written to S3 as **JSON Lines (.jsonl)**.
+
+### Why JSON Lines was chosen:
+- Simple and quick to implement during the urgent outage recovery
+- Excellent compatibility with Redshift's `FORMAT AS JSON 'auto'`
+- Easy debugging and human-readable during development
+
+### Trade-offs acknowledged:
+- JSON is more verbose and slower to load compared to columnar formats
+- Higher storage and processing cost at scale
+
+**Planned Enhancement**:  
+Convert output to **Parquet** format in a future iteration to improve COPY performance, reduce storage costs, and take full advantage of Redshift's columnar capabilities.
 
 ## How It Works
 
