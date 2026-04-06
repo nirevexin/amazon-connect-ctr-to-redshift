@@ -12,10 +12,12 @@ from botocore.exceptions import ClientError
 INSTANCE_ID = os.getenv("INSTANCE_ID")
 REGION = os.getenv("REGION")
 REDSHIFT_CONFIG = json.loads(os.environ["REDSHIFT_CONFIG"])
+S3_BUCKET = os.getenv("S3_STAGING_BUCKET")          
+S3_PREFIX = os.getenv("S3_PREFIX", "connect-staging")  
 
 EASTERN_TZ = pytz.timezone("America/New_York")
 CONNECT_CLIENT = boto3.client("connect", region_name=REGION)
-
+S3_CLIENT = boto3.client("s3", region_name=REGION)
 
 def get_previous_interval_bounds(now_ny: datetime):
     """Calculate the previous 2-hour window in NY time."""
@@ -79,11 +81,7 @@ def fetch_completed_calls(start_utc: datetime, end_utc: datetime):
         params = {
             "InstanceId": INSTANCE_ID,
             "MaxResults": 100,
-            "TimeRange": {
-                "Type": "INITIATION_TIMESTAMP",
-                "StartTime": start_utc,
-                "EndTime": end_utc
-            }
+            "TimeRange": {"Type": "INITIATION_TIMESTAMP", "StartTime": start_utc, "EndTime": end_utc}
         }
         if next_token:
             params["NextToken"] = next_token
@@ -116,41 +114,42 @@ def fetch_completed_calls(start_utc: datetime, end_utc: datetime):
 
             customer_phone, agent_holds, customer_hold_duration, last_update, in_queue_time, queue_duration, conn_to_sys = get_contact_details(contact_id)
 
-            rows.append((
-                contact.get('InitialContactId'),
-                contact.get('PreviousContactId'),
-                contact_id,
-                None,  # next_contact_id
-                contact.get('Channel'),
-                contact.get('InitiationMethod'),
-                parse_datetime(contact.get('InitiationTimestamp')),
-                parse_datetime(raw_disconn),
-                None,  # disconn_reason (not always available)
-                last_update,
-                parse_datetime(raw_agent_conn),
-                contact.get('AgentInfo', {}).get('Id'),
-                None,  # agent_username
-                None,  # agent_conn_att
-                None,  # afw fields
-                None,
-                None,
-                None,
-                agent_holds,
-                None,  # longest_hold
-                contact.get('QueueInfo', {}).get('Id'),
-                None,  # queue_name
-                in_queue_time,
-                None,  # out_queue_time
-                queue_duration,
-                None,  # customer_voice
-                customer_hold_duration,
-                contact_duration,
-                None,  # sys_phone
-                conn_to_sys,
-                customer_phone
-            ))
+            row = {
+                'init_contact_id': contact.get('InitialContactId'),
+                'prev_contact_id': contact.get('PreviousContactId'),
+                'contact_id': contact_id,
+                'next_contact_id': None,
+                'channel': contact.get('Channel'),
+                'init_method': contact.get('InitiationMethod'),
+                'init_time': parse_datetime(contact.get('InitiationTimestamp')),
+                'disconn_time': parse_datetime(raw_disconn),
+                'disconn_reason': None,
+                'last_update_time': last_update,
+                'agent_conn': parse_datetime(raw_agent_conn),
+                'agent_id': contact.get('AgentInfo', {}).get('Id'),
+                'agent_username': None,
+                'agent_conn_att': None,
+                'agent_afw_start': None,
+                'agent_afw_end': None,
+                'agent_afw_duration': None,
+                'agent_interact_duration': None,
+                'agent_holds': agent_holds,
+                'agent_longest_hold': None,
+                'queue_id': contact.get('QueueInfo', {}).get('Id'),
+                'queue_name': None,
+                'in_queue_time': in_queue_time,
+                'out_queue_time': None,
+                'queue_duration': queue_duration,
+                'customer_voice': None,
+                'customer_hold_duration': customer_hold_duration,
+                'contact_duration': contact_duration,
+                'sys_phone': None,
+                'conn_to_sys': conn_to_sys,
+                'customer_phone': customer_phone
+            }
+            rows.append(row)
 
-            time.sleep(0.05)  # Polite rate limiting
+            time.sleep(0.05)  # Rate limiting
 
         next_token = response.get("NextToken")
         if not next_token:
@@ -160,50 +159,83 @@ def fetch_completed_calls(start_utc: datetime, end_utc: datetime):
     return rows
 
 
-def insert_into_redshift(rows):
+def upload_to_s3(rows, interval_label: str):
+    """Upload rows as JSON Lines to S3."""
     if not rows:
-        print("No rows to insert.")
+        print("No rows to upload.")
+        return None
+
+    timestamp = datetime.now(EASTERN_TZ).strftime("%Y%m%d_%H%M%S")
+    s3_key = f"{S3_PREFIX}/{datetime.now().strftime('%Y/%m/%d')}/connect_calls_{interval_label}_{timestamp}.jsonl"
+
+    # Convert rows to JSON Lines
+    jsonl_data = "\n".join(json.dumps(row) for row in rows)
+
+    try:
+        S3_CLIENT.put_object(
+            Bucket=S3_BUCKET,
+            Key=s3_key,
+            Body=jsonl_data.encode('utf-8'),
+            ContentType='application/json'
+        )
+        print(f"Uploaded {len(rows)} records to s3://{S3_BUCKET}/{s3_key}")
+        return s3_key
+    except Exception as e:
+        print(f"Failed to upload to S3: {e}")
+        raise
+
+
+def copy_from_s3_to_redshift(s3_key: str):
+    """Execute COPY command from S3 into staging table."""
+    if not s3_key:
         return
 
-    insert_sql = """
-        INSERT INTO connect.f_calls_staging (
-            init_contact_id, prev_contact_id, contact_id, next_contact_id,
-            channel, init_method, init_time, disconn_time, disconn_reason,
-            last_update_time, agent_conn, agent_id, agent_username,
-            agent_conn_att, agent_afw_start, agent_afw_end, agent_afw_duration,
-            agent_interact_duration, agent_holds, agent_longest_hold,
-            queue_id, queue_name, in_queue_time, out_queue_time, queue_duration,
-            customer_voice, customer_hold_duration, contact_duration,
-            sys_phone, conn_to_sys, customer_phone
-        ) VALUES %s
+    copy_sql = f"""
+        COPY connect.f_calls_staging
+        FROM 's3://{S3_BUCKET}/{s3_key}'
+        IAM_ROLE 'arn:aws:iam::___________'   
+        FORMAT AS JSON 'auto'
+        TIMEFORMAT 'auto';
     """
 
     try:
         with psycopg2.connect(**REDSHIFT_CONFIG) as conn:
             with conn.cursor() as cur:
-                execute_values(cur, insert_sql, rows, page_size=1000)
-                print(f"Inserted {len(rows)} rows into staging table.")
+                cur.execute(copy_sql)
+                print(f"COPY command executed successfully for {s3_key}")
 
                 cur.execute('CALL connect.insert_new_f_calls();')
-                print("Stored procedure executed successfully.")
+                print("Stored procedure 'insert_new_f_calls()' executed.")
     except Exception as e:
-        print(f"Redshift insert error: {e}")
+        print(f"Redshift COPY or procedure error: {e}")
+        raise
 
 
 def lambda_handler(event, context):
     start_time = time.time()
     now_ny = datetime.now(EASTERN_TZ)
 
-    start_utc, end_utc, interval = get_previous_interval_bounds(now_ny)
-    print(f"Processing interval: {interval} (UTC: {start_utc} → {end_utc})")
+    start_utc, end_utc, interval_label = get_previous_interval_bounds(now_ny)
+    print(f"Processing interval: {interval_label} (UTC: {start_utc} → {end_utc})")
 
     calls = fetch_completed_calls(start_utc, end_utc)
-    insert_into_redshift(calls)
+
+    if calls:
+        s3_key = upload_to_s3(calls, interval_label)
+        copy_from_s3_to_redshift(s3_key)
+    else:
+        print("No calls found in this interval.")
 
     duration = time.time() - start_time
-    print(f"Execution completed in {int(duration // 60)}m {int(duration % 60)}s")
+    minutes = int(duration // 60)
+    seconds = int(duration % 60)
+    print(f"Execution completed in {minutes}m {seconds}s")
 
     return {
         "statusCode": 200,
-        "body": json.dumps({"processed": len(calls), "interval": interval})
+        "body": json.dumps({
+            "processed": len(calls),
+            "interval": interval_label,
+            "s3_key": s3_key if 's3_key' in locals() else None
+        })
     }
