@@ -23,6 +23,19 @@ This Lambda function transforms raw **Amazon Connect Contact Trace Records (CTRs
 
 ---
 
+## Redshift Loading
+
+After transformation, Firehose writes the records as JSON to an S3 bucket. Redshift then loads them using a `COPY` command similar to this:
+
+```sql
+COPY connect.f_calls
+FROM 's3://______'
+IAM_ROLE '____'
+MANIFEST
+FORMAT AS JSON 'auto';
+```
+---
+
 ## How It Works
 
 1. Firehose invokes this Lambda with a batch of records
