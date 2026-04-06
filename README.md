@@ -2,6 +2,22 @@
 
 Robust, serverless ETL solution for ingesting **Amazon Connect Contact Trace Records (CTRs)** into Amazon Redshift for contact center analytics and reporting.
 
+## Structure
+
+```
+amazon-connect-ctr-to-redshift/
+├── firehose-ctr-transformer/
+│   └── lambda_function.py
+├── connect-api-collector/
+│   └── lambda_function.py
+├── sql/
+│   ├── create_tables.sql
+│   └── insert_new_f_calls.sql
+├── README.md
+├── architecture-diagram.png (optional – create with draw.io)
+└── .gitignore
+```
+
 ## Overview
 
 This project implements two complementary ingestion paths:
