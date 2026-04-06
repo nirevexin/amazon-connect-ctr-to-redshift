@@ -6,15 +6,12 @@ Robust, serverless ETL solution for ingesting **Amazon Connect Contact Trace Rec
 
 ```
 amazon-connect-ctr-to-redshift/
-├── firehose-ctr-transformer/
+├── 01_firehose-ctr-transformer/
 │   └── lambda_function.py
-├── connect-api-collector/
+├── 02_connect-api-collector/
 │   └── lambda_function.py
-├── sql/
-│   ├── create_tables.sql
-│   └── insert_new_f_calls.sql
-├── README.md
-└── .gitignore
+├── .gitignore
+└── README.md
 ```
 
 ## Overview
@@ -29,7 +26,7 @@ The backup solution was built during a production incident when a Salesforce int
 ## Architecture
 
 - **Primary**: Direct PUT → Kinesis Firehose → Lambda (Python) → S3 → Redshift COPY (JSON)
-- **Fallback**: EventBridge (every 2h) → Lambda → Connect APIs → Redshift staging → Stored Procedure (SCD Type 1 merge)
+- **Fallback**: EventBridge (every 2h) → Lambda → Connect APIs → S3 → Redshift COPY (JSON) 
 
 **Key Features**
 - Idempotent processing using DynamoDB conditional writes
@@ -40,13 +37,12 @@ The backup solution was built during a production incident when a Salesforce int
 
 ## Repository Structure
 
-- `firehose-ctr-transformer/` – Lambda for Firehose data transformation
-- `connect-api-collector/` – Backup collector Lambda
-- `sql/` – Table definitions and stored procedure
+- `01_firehose-ctr-transformer/` – Lambda for Firehose data transformation
+- `02_connect-api-collector/` – Backup collector Lambda
 
 ## Tech Stack
 
-- **AWS**: Kinesis Data Firehose, Lambda (Python 3.9+), DynamoDB, Redshift Serverless, EventBridge, Amazon Connect
+- **AWS**: Kinesis Data Firehose, Lambda (Python 3.9+), DynamoDB, Redshift Serverless, EventBridge, Amazon Connect, S3
 - **Libraries**: boto3, psycopg2, pytz
 
 ## Lessons Learned
@@ -56,9 +52,7 @@ The backup solution was built during a production incident when a Salesforce int
 - Staging + stored procedure pattern works well for controlled Redshift loads.
 
 **Potential Improvements**
-- Add CloudWatch metrics and alarms
-- Implement retry logic with exponential backoff
-- Migrate to Amazon Connect Data Lake export (when available)
+- Migrate from JSON Lines to Parquet format for S3 files to improve COPY performance, reduce storage costs, and leverage Redshift’s columnar capabilities
 - Containerize or move heavier logic to AWS Glue
 
 ## License
